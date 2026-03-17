@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>PUPIL — ストレス解析</title>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Noto+Sans+JP:wght@300;400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #050810;
+    --surface: #0c1020;
+    --border: #1a2340;
+    --accent: #00e5ff;
+    --accent2: #ff3d71;
+    --accent3: #a259ff;
+    --text: #e8eaf6;
+    --muted: #4a5680;
+    --green: #00e676;
+    --yellow: #ffea00;
+    --red: #ff3d71;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Noto Sans JP', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Animated background grid */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,229,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,229,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .app {
+    position: relative;
+    z-index: 1;
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 16px;
+    min-height: 100vh;
+  }
+
+  /* Header */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 0 20px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 20px;
+  }
+
+  .logo {
+    font-family: 'Space Mono', monospace;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 6px;
+    color: var(--accent);
+    text-shadow: 0 0 20px rgba(0,229,255,0.5);
+  }
+
+  .status-badge {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 2px;
+    padding: 4px 10px;
+    border-radius: 2px;
+    border: 1px solid var(--muted);
+    color: var(--muted);
+    transition: all 0.3s;
+  }
+
+  .status-badge.active {
+    border-color: var(--green);
+    color: var(--green);
+    box-shadow: 0 0 10px rgba(0,230,118,0.2);
+    animation: pulse-badge 2s infinite;
+  }
+
+  @keyframes pulse-badge {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+  }
+
+  /* Camera Section */
+  .camera-section {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 3/4;
+    background: var(--surface);
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    margin-bottom: 16px;
+  }
+
+  #videoElement {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transform: scaleX(-1);
+    display: block;
+  }
+
+  #overlayCanvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 100%;
+    transform: scaleX(-1);
+  }
+
+  .camera-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface);
+    transition: opacity 0.5s;
+  }
+
+  .camera-overlay.hidden { opacity: 0; pointer-events: none; }
+
+  .start-btn {
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-family: 'Space Mono', monospace;
+    font-size: 13px;
+    letter-spacing: 3px;
+    padding: 14px 32px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .start-btn::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: var(--accent);
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+
+  .start-btn:active::before { opacity: 0.15; }
+
+  .start-btn-icon {
+    font-size: 40px;
+    margin-bottom: 20px;
+    opacity: 0.6;
+  }
+
+  .start-hint {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 12px;
+    letter-spacing: 1px;
+  }
+
+  /* Scan lines overlay */
+  .camera-section::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.03) 2px,
+      rgba(0,0,0,0.03) 4px
+    );
+    pointer-events: none;
+    z-index: 10;
+  }
+
+  /* Corner decorations */
+  .corner {
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    z-index: 11;
+  }
+  .corner-tl { top: 10px; left: 10px; border-top: 2px solid var(--accent); border-left: 2px solid var(--accent); }
+  .corner-tr { top: 10px; right: 10px; border-top: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+  .corner-bl { bottom: 10px; left: 10px; border-bottom: 2px solid var(--accent); border-left: 2px solid var(--accent); }
+  .corner-br { bottom: 10px; right: 10px; border-bottom: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+
+  /* Metrics Grid */
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+
+  .metric-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.3s;
+  }
+
+  .metric-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 3px;
+    height: 100%;
+    background: var(--accent);
+    opacity: 0.5;
+  }
+
+  .metric-card.stress::before { background: var(--accent2); }
+  .metric-card.ratio::before { background: var(--accent3); }
+  .metric-card.blink::before { background: var(--yellow); }
+
+  .metric-label {
+    font-size: 9px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    font-family: 'Space Mono', monospace;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .metric-value {
+    font-family: 'Space Mono', monospace;
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1;
+    transition: color 0.3s;
+  }
+
+  .metric-unit {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 4px;
+    font-family: 'Space Mono', monospace;
+  }
+
+  /* Stress Meter */
+  .stress-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+
+  .stress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+  }
+
+  .section-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 3px;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+
+  .stress-level-badge {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 2px;
+    padding: 3px 10px;
+    border-radius: 2px;
+    font-weight: 700;
+    transition: all 0.3s;
+  }
+
+  .stress-bar-container {
+    position: relative;
+    height: 8px;
+    background: var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 8px;
+  }
+
+  .stress-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.5s ease, background 0.5s;
+    background: linear-gradient(90deg, var(--green), var(--yellow), var(--red));
+    background-size: 300% 100%;
+  }
+
+  .stress-scale {
+    display: flex;
+    justify-content: space-between;
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    color: var(--muted);
+  }
+
+  /* Chart Section */
+  .chart-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+
+  .chart-wrapper {
+    position: relative;
+    height: 120px;
+  }
+
+  /* Analysis Note */
+  .analysis-note {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.7;
+    letter-spacing: 0.5px;
+    margin-bottom: 16px;
+  }
+
+  .analysis-note span {
+    color: var(--accent);
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+  }
+
+  /* Face detection indicator */
+  .face-indicator {
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 2px;
+    padding: 4px 12px;
+    background: rgba(5,8,16,0.8);
+    border-radius: 2px;
+    z-index: 12;
+    transition: all 0.3s;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .face-indicator.detected {
+    color: var(--green);
+    border: 1px solid rgba(0,230,118,0.3);
+  }
+
+  .face-indicator.searching {
+    color: var(--yellow);
+    animation: pulse-badge 1.5s infinite;
+  }
+
+  /* Loading */
+  .loading-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    transition: opacity 0.5s;
+  }
+
+  .loading-overlay.hidden { opacity: 0; pointer-events: none; }
+
+  .loading-logo {
+    font-family: 'Space Mono', monospace;
+    font-size: 28px;
+    letter-spacing: 10px;
+    color: var(--accent);
+    text-shadow: 0 0 30px rgba(0,229,255,0.6);
+    margin-bottom: 8px;
+  }
+
+  .loading-sub {
+    font-size: 11px;
+    letter-spacing: 4px;
+    color: var(--muted);
+    margin-bottom: 32px;
+  }
+
+  .loading-bar {
+    width: 200px;
+    height: 2px;
+    background: var(--border);
+    border-radius: 1px;
+    overflow: hidden;
+  }
+
+  .loading-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    animation: loading-anim 1.5s ease-in-out infinite;
+  }
+
+  @keyframes loading-anim {
+    0% { width: 0%; margin-left: 0; }
+    50% { width: 60%; margin-left: 20%; }
+    100% { width: 0%; margin-left: 100%; }
+  }
+
+  .warning-text {
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 20px;
+    letter-spacing: 1px;
+    text-align: center;
+    max-width: 280px;
+    line-height: 1.8;
+  }
+</style>
+</head>
+<body>
+
+<!-- Loading Screen -->
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="loading-logo">PUPIL</div>
+  <div class="loading-sub">STRESS ANALYZER</div>
+  <div class="loading-bar"><div class="loading-bar-fill"></div></div>
+  <div class="warning-text">MediaPipeを読み込んでいます...<br>初回は時間がかかる場合があります</div>
+</div>
+
+<div class="app">
+  <header>
+    <div class="logo">PUPIL</div>
+    <div class="status-badge" id="statusBadge">STANDBY</div>
+  </header>
+
+  <!-- Camera -->
+  <div class="camera-section">
+    <div class="corner corner-tl"></div>
+    <div class="corner corner-tr"></div>
+    <div class="corner corner-bl"></div>
+    <div class="corner corner-br"></div>
+
+    <video id="videoElement" playsinline autoplay muted></video>
+    <canvas id="overlayCanvas"></canvas>
+
+    <div class="camera-overlay" id="cameraOverlay">
+      <div class="start-btn-icon">👁</div>
+      <button class="start-btn" id="startBtn">START SCAN</button>
+      <div class="start-hint">カメラへのアクセスを許可してください</div>
+    </div>
+
+    <div class="face-indicator" id="faceIndicator" style="display:none">SCANNING...</div>
+  </div>
+
+  <!-- Metrics -->
+  <div class="metrics-grid">
+    <div class="metric-card">
+      <div class="metric-label">LEFT PUPIL</div>
+      <div class="metric-value" id="leftPupil">—</div>
+      <div class="metric-unit">ratio</div>
+    </div>
+    <div class="metric-card stress">
+      <div class="metric-label">RIGHT PUPIL</div>
+      <div class="metric-value" id="rightPupil">—</div>
+      <div class="metric-unit">ratio</div>
+    </div>
+    <div class="metric-card ratio">
+      <div class="metric-label">ASYMMETRY</div>
+      <div class="metric-value" id="asymmetry">—</div>
+      <div class="metric-unit">L/R diff</div>
+    </div>
+    <div class="metric-card blink">
+      <div class="metric-label">BLINK RATE</div>
+      <div class="metric-value" id="blinkRate">—</div>
+      <div class="metric-unit">per min</div>
+    </div>
+  </div>
+
+  <!-- Stress Meter -->
+  <div class="stress-section">
+    <div class="stress-header">
+      <div class="section-title">STRESS LEVEL</div>
+      <div class="stress-level-badge" id="stressLabel" style="color:var(--muted);border:1px solid var(--border)">—</div>
+    </div>
+    <div class="stress-bar-container">
+      <div class="stress-bar-fill" id="stressBar" style="width:0%"></div>
+    </div>
+    <div class="stress-scale">
+      <span>CALM</span>
+      <span>MODERATE</span>
+      <span>HIGH</span>
+    </div>
+  </div>
+
+  <!-- Chart -->
+  <div class="chart-section">
+    <div class="stress-header">
+      <div class="section-title">TIMELINE</div>
+      <div style="font-family:'Space Mono',monospace;font-size:9px;color:var(--muted)">60s</div>
+    </div>
+    <div class="chart-wrapper">
+      <canvas id="timelineChart"></canvas>
+    </div>
+  </div>
+
+  <!-- Note -->
+  <div class="analysis-note">
+    <span>⚠ NOTE</span><br>
+    本アプリは参考値を表示します。瞳孔径は照明・感情・薬物など多くの要因で変化します。医療診断への使用はできません。明るい場所・正面を向いた状態で使用してください。
+  </div>
+</div>
+
+<script>
+// ===== State =====
+let faceMesh = null;
+let camera = null;
+let isRunning = false;
+let chart = null;
+let stressHistory = [];
+let leftPupilHistory = [];
+let rightPupilHistory = [];
+let blinkCount = 0;
+let lastBlinkTime = Date.now();
+let blinkStartTime = Date.now();
+let wasEyeOpen = true;
+const MAX_HISTORY = 60;
+
+// ===== Chart Setup =====
+function initChart() {
+  const ctx = document.getElementById('timelineChart').getContext('2d');
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: Array(MAX_HISTORY).fill(''),
+      datasets: [{
+        label: 'ストレス',
+        data: Array(MAX_HISTORY).fill(null),
+        borderColor: '#00e5ff',
+        backgroundColor: 'rgba(0,229,255,0.05)',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.4,
+        fill: true,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { display: false },
+        y: {
+          min: 0, max: 100,
+          display: true,
+          grid: { color: 'rgba(26,35,64,0.8)', drawBorder: false },
+          ticks: {
+            color: '#4a5680',
+            font: { family: 'Space Mono', size: 9 },
+            maxTicksLimit: 3,
+          }
+        }
+      }
+    }
+  });
+}
+
+// ===== Pupil Detection Helpers =====
+// MediaPipe Face Mesh landmark indices
+// Left eye: iris landmarks 468-472, right eye: 473-477
+// Left eye contour: 33,7,163,144,145,153,154,155,133,173,157,158,159,160,161,246
+// Right eye contour: 362,382,381,380,374,373,390,249,263,466,388,387,386,385,384,398
+
+function getIrisRadius(landmarks, indices) {
+  // Calculate radius of iris circle from 5 landmarks (center + 4 points)
+  const pts = indices.map(i => landmarks[i]);
+  // Use center (index 0) and 4 edge points to estimate radius
+  const cx = pts[0].x, cy = pts[0].y;
+  let sumR = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const dx = pts[i].x - cx;
+    const dy = pts[i].y - cy;
+    sumR += Math.sqrt(dx*dx + dy*dy);
+  }
+  return sumR / (pts.length - 1);
+}
+
+function getEyeOpenness(landmarks, upperIdx, lowerIdx) {
+  const upper = landmarks[upperIdx];
+  const lower = landmarks[lowerIdx];
+  return Math.abs(upper.y - lower.y);
+}
+
+function getEyeWidth(landmarks, leftIdx, rightIdx) {
+  const l = landmarks[leftIdx];
+  const r = landmarks[rightIdx];
+  return Math.sqrt((r.x-l.x)**2 + (r.y-l.y)**2);
+}
+
+// ===== Stress Score Calculation =====
+function calcStressScore(leftRatio, rightRatio, asymmetry) {
+  // Baseline: relaxed pupil/iris ratio ~0.3, stressed ~0.5+
+  // We normalize relative to running baseline
+  const avg = (leftRatio + rightRatio) / 2;
+
+  if (leftPupilHistory.length < 5) return 30; // Default low
+
+  const baseline = leftPupilHistory.slice(0, Math.min(10, leftPupilHistory.length))
+    .reduce((a,b) => a+b, 0) / Math.min(10, leftPupilHistory.length);
+
+  // Dilation from baseline (0-1 range mapped to 0-100)
+  let dilationScore = Math.max(0, (avg - baseline) / baseline) * 300;
+  dilationScore = Math.min(dilationScore, 60);
+
+  // Asymmetry score (left/right difference)
+  let asymScore = asymmetry * 2000;
+  asymScore = Math.min(asymScore, 30);
+
+  // Blink rate: low blink = high stress (typical stress: <10/min, relaxed: 15-20/min)
+  const elapsed = (Date.now() - blinkStartTime) / 60000;
+  const bpm = elapsed > 0.1 ? blinkCount / elapsed : 15;
+  let blinkScore = Math.max(0, 20 - bpm) * 1.5;
+  blinkScore = Math.min(blinkScore, 20);
+
+  const total = 20 + dilationScore + asymScore + blinkScore;
+  return Math.min(100, Math.max(0, total));
+}
+
+// ===== Draw Overlay =====
+function drawOverlay(canvas, landmarks, leftIrisIndices, rightIrisIndices, video) {
+  const ctx = canvas.getContext('2d');
+  canvas.width = video.videoWidth || video.clientWidth;
+  canvas.height = video.videoHeight || video.clientHeight;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const w = canvas.width, h = canvas.height;
+
+  function lm(i) {
+    return { x: landmarks[i].x * w, y: landmarks[i].y * h };
+  }
+
+  // Draw iris circles
+  function drawIris(indices, color) {
+    const center = lm(indices[0]);
+    const edge = lm(indices[1]);
+    const r = Math.sqrt((edge.x-center.x)**2 + (edge.y-center.y)**2);
+    ctx.beginPath();
+    ctx.arc(center.x, center.y, r, 0, 2*Math.PI);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Inner dot
+    ctx.beginPath();
+    ctx.arc(center.x, center.y, 2, 0, 2*Math.PI);
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
+
+  drawIris(leftIrisIndices, 'rgba(0,229,255,0.8)');
+  drawIris(rightIrisIndices, 'rgba(162,89,255,0.8)');
+}
+
+// ===== MediaPipe Setup =====
+async function setupFaceMesh() {
+  faceMesh = new FaceMesh({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+  });
+
+  faceMesh.setOptions({
+    maxNumFaces: 1,
+    refineLandmarks: true, // Required for iris landmarks (468-477)
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5,
+  });
+
+  faceMesh.onResults(onResults);
+}
+
+function onResults(results) {
+  const faceIndicator = document.getElementById('faceIndicator');
+
+  if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+    faceIndicator.textContent = 'SEARCHING...';
+    faceIndicator.className = 'face-indicator searching';
+    return;
+  }
+
+  faceIndicator.textContent = 'FACE DETECTED';
+  faceIndicator.className = 'face-indicator detected';
+
+  const landmarks = results.multiFaceLandmarks[0];
+
+  // Iris landmark indices (available with refineLandmarks: true)
+  // Left iris: 468=center, 469=right, 470=bottom, 471=left, 472=top
+  // Right iris: 473=center, 474=left, 475=bottom, 476=right, 477=top
+  const leftIrisIdx = [468, 469, 470, 471, 472];
+  const rightIrisIdx = [473, 474, 475, 476, 477];
+
+  if (!landmarks[468] || !landmarks[473]) return; // No iris data
+
+  // Calculate iris radii
+  const leftIrisR = getIrisRadius(landmarks, leftIrisIdx);
+  const rightIrisR = getIrisRadius(landmarks, rightIrisIdx);
+
+  // Eye width for normalization (to handle camera distance)
+  const leftEyeW = getEyeWidth(landmarks, 33, 133);
+  const rightEyeW = getEyeWidth(landmarks, 362, 263);
+
+  // Pupil/eye ratio (iris radius normalized by eye width)
+  const leftRatio = leftEyeW > 0 ? leftIrisR / leftEyeW : 0;
+  const rightRatio = rightEyeW > 0 ? rightIrisR / rightEyeW : 0;
+  const asymmetry = Math.abs(leftRatio - rightRatio);
+
+  // Eye openness for blink detection
+  const leftOpen = getEyeOpenness(landmarks, 159, 145);
+  const BLINK_THRESHOLD = 0.015;
+  if (leftOpen < BLINK_THRESHOLD && wasEyeOpen) {
+    blinkCount++;
+    wasEyeOpen = false;
+  } else if (leftOpen >= BLINK_THRESHOLD) {
+    wasEyeOpen = true;
+  }
+
+  // Store history
+  leftPupilHistory.push(leftRatio);
+  rightPupilHistory.push(rightRatio);
+  if (leftPupilHistory.length > 100) leftPupilHistory.shift();
+  if (rightPupilHistory.length > 100) rightPupilHistory.shift();
+
+  // Stress score
+  const stress = calcStressScore(leftRatio, rightRatio, asymmetry);
+
+  stressHistory.push(stress);
+  if (stressHistory.length > MAX_HISTORY) stressHistory.shift();
+
+  // Blink rate
+  const elapsed = (Date.now() - blinkStartTime) / 60000;
+  const bpm = elapsed > 0.05 ? Math.round(blinkCount / elapsed) : 0;
+
+  // Update UI
+  updateUI(leftRatio, rightRatio, asymmetry, stress, bpm);
+
+  // Draw overlay
+  const canvas = document.getElementById('overlayCanvas');
+  const video = document.getElementById('videoElement');
+  drawOverlay(canvas, landmarks, leftIrisIdx, rightIrisIdx, video);
+}
+
+function updateUI(left, right, asym, stress, bpm) {
+  document.getElementById('leftPupil').textContent = left.toFixed(3);
+  document.getElementById('rightPupil').textContent = right.toFixed(3);
+  document.getElementById('asymmetry').textContent = asym.toFixed(3);
+  document.getElementById('blinkRate').textContent = bpm;
+
+  // Stress bar
+  document.getElementById('stressBar').style.width = stress + '%';
+
+  // Stress label
+  const label = document.getElementById('stressLabel');
+  if (stress < 33) {
+    label.textContent = 'CALM';
+    label.style.color = 'var(--green)';
+    label.style.borderColor = 'rgba(0,230,118,0.4)';
+  } else if (stress < 66) {
+    label.textContent = 'MODERATE';
+    label.style.color = 'var(--yellow)';
+    label.style.borderColor = 'rgba(255,234,0,0.4)';
+  } else {
+    label.textContent = 'HIGH STRESS';
+    label.style.color = 'var(--red)';
+    label.style.borderColor = 'rgba(255,61,113,0.4)';
+  }
+
+  // Update chart
+  if (chart) {
+    const data = [...Array(MAX_HISTORY - stressHistory.length).fill(null), ...stressHistory];
+    chart.data.datasets[0].data = data;
+    chart.update();
+  }
+}
+
+// ===== Start Camera =====
+async function startCamera() {
+  try {
+    document.getElementById('cameraOverlay').classList.add('hidden');
+    document.getElementById('faceIndicator').style.display = 'block';
+    document.getElementById('statusBadge').textContent = 'ACTIVE';
+    document.getElementById('statusBadge').classList.add('active');
+
+    const video = document.getElementById('videoElement');
+
+    camera = new Camera(video, {
+      onFrame: async () => {
+        if (faceMesh) await faceMesh.send({ image: video });
+      },
+      width: 640,
+      height: 480,
+      facingMode: 'user',
+    });
+
+    await camera.start();
+    blinkStartTime = Date.now();
+    isRunning = true;
+
+  } catch (err) {
+    console.error('Camera error:', err);
+    alert('カメラへのアクセスができませんでした。\nブラウザの設定でカメラを許可してください。');
+  }
+}
+
+// ===== Init =====
+async function init() {
+  initChart();
+  await setupFaceMesh();
+
+  // Hide loading
+  setTimeout(() => {
+    document.getElementById('loadingOverlay').classList.add('hidden');
+  }, 1500);
+
+  document.getElementById('startBtn').addEventListener('click', startCamera);
+}
+
+window.addEventListener('load', init);
+</script>
+</body>
+</html>
